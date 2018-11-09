@@ -11,9 +11,6 @@ import time
 import dlib
 import cv2
 
-
-
-
 class ConstsClass:
 	# eye aspect ratio for a blink
 	# number of consecutive frames the eye must be below the threshold
@@ -21,7 +18,8 @@ class ConstsClass:
 	EYE_AR_CONSEC_FRAMES = 3
 	FrameWidth=720
 
-	def CalcEAR(self,eye):
+	@staticmethod
+	def CalcEAR(eye):
 		# compute the euclidean distances between the two sets of
 		# vertical eye landmarks (x, y)-coordinates
 		A = dist.euclidean(eye[1], eye[5])
@@ -41,7 +39,7 @@ class ImageProcUtil:
 
 	def ImproveLowLight_Average(self, frameIn):
 
-		NumFramesToAverage = 5
+		NumFramesToAverage = 3
 		average_frame = np.zeros(frameIn.shape,dtype=float)
 		average_frame += frameIn
 		for i in range(1, NumFramesToAverage - 1):
@@ -72,14 +70,14 @@ class ImageProcUtil:
 		rightEAR = ConstsClass.CalcEAR(rightEye)
 
 		# average the eye aspect ratio together for both eyes
-		ear = (leftEAR + rightEAR) / 2.0
+		avgEAR = (leftEAR + rightEAR) / 2.0
 
 		# compute the convex hull for the left and right eye, then
 		# visualize each of the eyes
 		leftEyeHull = cv2.convexHull(leftEye)
 		rightEyeHull = cv2.convexHull(rightEye)
 
-		return leftEyeHull,rightEyeHull,ear
+		return leftEyeHull,rightEyeHull,avgEAR
 
 # initialize the frame counters and the total number of blinks
 Local_Closed_Counter = 0
@@ -118,7 +116,9 @@ frame = imutils.resize(frame, width=ConstsClass.FrameWidth)
 
 fourcc = cv2.VideoWriter_fourcc(*'DIVX')
 #fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-out = cv2.VideoWriter('output.avi',fourcc, 20.0,(frame.shape[1],frame.shape[0]))
+save=True
+if save:
+	out = cv2.VideoWriter('output.avi',fourcc, 20.0,(frame.shape[1],frame.shape[0]))
 
 UtilsClass= ImageProcUtil()
 
@@ -142,7 +142,7 @@ while True:
 
 	frame = imutils.resize(frame, width=ConstsClass.FrameWidth)
 
-	improve_low_light=1
+	improve_low_light=2
 	if improve_low_light==1:
 		gray=UtilsClass.ImproveLowLight_Average(frame)
 	elif improve_low_light==2:
@@ -181,12 +181,16 @@ while True:
 		# otherwise, the eye aspect ratio is not below the blink
 		# threshold
 		else:
-			# if the eyes were closed for a sufficient number of
-			# then increment the total number of blinks
-			if Local_Closed_Counter >= ConstsClass.EYE_AR_CONSEC_FRAMES:
-				TOTAL += 1
 			# reset the eye frame counter
-			COUNTER = 0
+			Local_Closed_Counter = 0
+
+		# if the eyes were closed for a sufficient number of
+		# then increment the total number of blinks
+		if Local_Closed_Counter >= ConstsClass.EYE_AR_CONSEC_FRAMES:
+			TOTAL += 1
+			# reset the eye frame counter
+			Local_Closed_Counter = 0
+
 
 		# draw the total number of blinks on the frame along with
 		# the computed eye aspect ratio for the frame
@@ -199,19 +203,20 @@ while True:
 
 	# show the frame
 
-	#bothImages=cv2.hconcat(frame,gray)
-	cv2.imshow("Frame", frame)
+	bothImages=cv2.hconcat(frame,gray)
 
-	out.write(frame)
+	#cv2.imshow("Frame", frame)
+	cv2.imshow("Frame", bothImages)
+
+	if save:
+		out.write(frame)
+
 	key = cv2.waitKey(1) & 0xFF
-
 	# if the `q` key was pressed, break from the loop
 	if key == ord("q"):
 		break
 
 # do a bit of cleanup
-
-
 vs.release()
 out.release()
 cv2.destroyAllWindows()
