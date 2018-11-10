@@ -43,13 +43,17 @@ class ImageProcUtil:
 
 	def ImproveLowLight_Average(self, frameIn, vs):
 	
-		NumFramesToAverage = 3
+		NumFramesToAverage = 5
 		average_frame = np.zeros(frameIn.shape, dtype=float)
 		average_frame += frameIn
 		for i in range(1, NumFramesToAverage - 1):
 			(grabbed, frame) = vs.read()
-			frame = imutils.resize(frame, width=frameIn.shape[1])
+			if grabbed:
+				frame = imutils.resize(frame, width=frameIn.shape[1])
+			else:
+				continue
 			average_frame += frame
+
 		average_frame /= NumFramesToAverage
 		average_frame.astype(np.uint8)
 		average_normalized_frame = cv2.normalize(average_frame, None, 0, 255, cv2.NORM_MINMAX)
@@ -114,14 +118,17 @@ def main():
 	
 	(grabbed, frame) = vcapAsync.read()
 	
-	Q = queue.Queue(100)
-	
 	if not grabbed:
 		print("[INFO] bad format frame, exiting")
 		quit()
-	
+
+	darkField = cv2.imread('dark.png')
+	darkField = imutils.resize(darkField , width=ConstsClass.FrameWidth)
+
 	frame = imutils.resize(frame, width=ConstsClass.FrameWidth)
-	
+
+	frame-=darkField #remove dark field noise
+
 	fourcc = cv2.VideoWriter_fourcc(*'DIVX')
 	# fourcc = cv2.VideoWriter_fourcc(*'MJPG')
 	save = False
@@ -129,36 +136,37 @@ def main():
 		out = cv2.VideoWriter('output.avi', fourcc, 20.0, (frame.shape[1] * 2, frame.shape[0]))
 	
 	UtilsClass = ImageProcUtil()
-	
+
+	method = ''
+	frameNum=0
+
 	# loop over frames from the video stream
 	while True:
 	
 		fps = imutils.video.FPS().start()
+
 		(grabbed, frame) = vcapAsync.read()
 	
 		if not grabbed:
 			print("[INFO] bad format frame, exiting")
 			break
-	
-		Q.put()
-		averageDarkFrame = np.zeros(frame.shape, dtype=float)
-		if Q.full():
-			for frameInQ in Q:
-				averageDarkFrame += frameInQ
-			averageDarkFrame /= 100
-			averageDarkFrame.astype(np.uint8)
-			cv2.imwrite('dark.png', averageDarkFrame)
-	
+
+		#SaveDarkField(Q, frame)
+		frameNum +=1
 		frame = imutils.resize(frame, width=ConstsClass.FrameWidth)
-	
-		improve_low_light = 3
+
+		improve_low_light = int((frameNum/100+1)%4)
+
 		if improve_low_light == 1:
 			gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync)
+			method='Averaging'
 		elif improve_low_light == 2:
 			gray = UtilsClass.ImproveLowLight_CLAHE(frame)
+			method = 'Clahe'
 		elif improve_low_light == 3:
 			gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync)
 			gray = UtilsClass.ImproveLowLight_CLAHE(gray)
+			method = 'Averaging then Clahe'
 		else:
 			gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 	
@@ -210,8 +218,10 @@ def main():
 					(255, 255, 255), 1)
 	
 		# show the frame
-		grayBGR = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+		#grayBGR = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+		grayBGR = np.stack([gray, gray,gray],2)
 		cv2.putText(grayBGR, "improved frame", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+		cv2.putText(grayBGR, method, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 		bothImages = cv2.hconcat([frame, grayBGR])
 	
 		# cv2.imshow("Frame", frame)
@@ -226,10 +236,23 @@ def main():
 			break
 	
 	# do a bit of cleanup
-	
+
 	vcapAsync.release()
 	out.release()
 	cv2.destroyAllWindows()
+
+
+
+def SaveDarkField(Q, frame):
+	Q.put(frame)
+	averageDarkFrame = np.zeros(frame.shape, dtype=float)
+	if Q.full():
+		for i in range(1, 100):
+			frameInQ = Q.get()
+			averageDarkFrame += frameInQ
+		averageDarkFrame /= 100
+		averageDarkFrame.astype(np.uint8)
+		cv2.imwrite('dark.png', averageDarkFrame)
 
 
 main()
