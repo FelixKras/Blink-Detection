@@ -20,6 +20,7 @@ class VideoCaptureAsync:
 			return None
 		self.started = True
 		self.thread = threading.Thread(target=self.update, args=())
+		self.thread.daemon = True
 		self.thread.start()
 		return self
 	
@@ -48,7 +49,8 @@ class VideoCaptureAsync:
 	def stop(self):
 		self.started = False
 		self.thread.join()
-	
+	def quelen(self):
+		return self.FramesQue.qsize()
 	def __exit__(self, exec_type, exc_value, traceback):
 		self.cap.release()
 	

@@ -4,7 +4,7 @@ from imutils.video import FileVideoStream
 from imutils import face_utils
 import numpy as np
 import imutils
-import queue
+#import queue
 import time
 import dlib
 import cv2
@@ -41,9 +41,8 @@ class ConstsClass:
 
 class ImageProcUtil:
 
-	def ImproveLowLight_Average(self, frameIn, vs):
+	def ImproveLowLight_Average(self, frameIn, vs, NumFramesToAverage):
 	
-		NumFramesToAverage = 5
 		average_frame = np.zeros(frameIn.shape, dtype=float)
 		average_frame += frameIn
 		for i in range(1, NumFramesToAverage - 1):
@@ -68,10 +67,31 @@ class ImageProcUtil:
 		elif len(frame.shape) == 2:
 			gray_before_CLAHE = frame
 	
-		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 		gray_after_CLAHE = clahe.apply(gray_before_CLAHE)
 		return gray_after_CLAHE
-	
+
+	def ImproveLowLight_CLAHE_Average(self, frameIn,vs, NumFramesToAverage):
+
+		frame_after_clahe = self.ImproveLowLight_CLAHE(frameIn)
+		average_frame = np.zeros(frame_after_clahe.shape, dtype=float)
+		average_frame += frame_after_clahe
+		for i in range(1, NumFramesToAverage - 1):
+			(grabbed, frame) = vs.read()
+			if grabbed:
+				frame = imutils.resize(frame, width=frameIn.shape[1])
+				frame_after_clahe=self.ImproveLowLight_CLAHE(frame)
+			else:
+				continue
+			average_frame += frame_after_clahe
+
+		average_frame /= NumFramesToAverage
+		average_frame.astype(np.uint8)
+		average_normalized_frame = cv2.normalize(average_frame, None, 0, 255, cv2.NORM_MINMAX)
+		return average_normalized_frame.astype(np.uint8)
+
+
+
 	def HandleEyeDetection(self, leftEye, rightEye):
 	
 		leftEAR = ConstsClass.CalcEAR(leftEye)
@@ -137,7 +157,7 @@ def main():
 	
 	UtilsClass = ImageProcUtil()
 
-	method = ''
+	method = ['Averaging', 'Clahe','Averaging then Clahe','Clahe then Averaging','HSV v component and Clahe']
 	frameNum=0
 
 	# loop over frames from the video stream
@@ -151,22 +171,32 @@ def main():
 			print("[INFO] bad format frame, exiting")
 			break
 
+
 		#SaveDarkField(Q, frame)
 		frameNum +=1
 		frame = imutils.resize(frame, width=ConstsClass.FrameWidth)
 
-		improve_low_light = int((frameNum/100+1)%4)
-
+		improve_low_light = int((frameNum/40)%(len(method)))+1 #change the method every 80 frames
 		if improve_low_light == 1:
-			gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync)
-			method='Averaging'
+			gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync,10)
+
 		elif improve_low_light == 2:
 			gray = UtilsClass.ImproveLowLight_CLAHE(frame)
-			method = 'Clahe'
+
 		elif improve_low_light == 3:
-			gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync)
+			gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync,10)
 			gray = UtilsClass.ImproveLowLight_CLAHE(gray)
-			method = 'Averaging then Clahe'
+
+		# todo: refactor averaging so it doesnt depend on vcap/vs and can ve fed by CLAHE
+		elif improve_low_light == 4:
+			gray = UtilsClass.ImproveLowLight_CLAHE_Average(frame,vcapAsync,10)
+
+		elif improve_low_light == 5:
+			HSV = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+			v_only = HSV[:, :, 2]
+			gray=v_only
+			gray = UtilsClass.ImproveLowLight_CLAHE(gray)
+
 		else:
 			gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 	
@@ -214,14 +244,13 @@ def main():
 			cv2.putText(frame, "EAR: {:.2f}".format(ear), (300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 	
 		fps.stop()
-		cv2.putText(frame, "FPS: {:.2f}".format(1 / fps.elapsed()), (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-					(255, 255, 255), 1)
-	
+		cv2.putText(frame, "FPS: {:.2f}".format(1 / fps.elapsed()), (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7,(255, 255, 255), 1)
+		cv2.putText(frame, "Q size: {:.2f}".format(vcapAsync.quelen()), (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7,(255, 255, 255), 1)
 		# show the frame
 		#grayBGR = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 		grayBGR = np.stack([gray, gray,gray],2)
-		cv2.putText(grayBGR, "improved frame", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-		cv2.putText(grayBGR, method, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+		cv2.putText(grayBGR, "improved frame", (10, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+		cv2.putText(grayBGR, method[improve_low_light-1], (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 		bothImages = cv2.hconcat([frame, grayBGR])
 	
 		# cv2.imshow("Frame", frame)
@@ -237,8 +266,9 @@ def main():
 	
 	# do a bit of cleanup
 
-	vcapAsync.release()
-	out.release()
+	vcapAsync.stop()
+	if save:
+		out.release()
 	cv2.destroyAllWindows()
 
 
