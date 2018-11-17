@@ -1,14 +1,16 @@
-import threading
+#import threading
+import statistics
+import multiprocessing as mp
 import cv2
-import queue
+import os
+import datetime
+import time
 
 class VideoCaptureAsync:
-	def __init__(self, src=0):
-		self.src = src
-		self.cap = cv2.VideoCapture(self.src)
-		self.grabbed, self.frame = self.cap.read()
+	def __init__(self,src=0):
+		self.src=src
 		self.started = False
-		self.FramesQue=queue.Queue(10)
+		self.FramesQue=mp.Queue(20)
 		#self.read_lock = threading.Lock()
 
 	def set(self, var1, var2):
@@ -18,39 +20,76 @@ class VideoCaptureAsync:
 		if self.started:
 			print('[!] Asynchroneous video capturing has already been started.')
 			return None
+
 		self.started = True
-		self.thread = threading.Thread(target=self.update, args=())
-		self.thread.daemon = True
-		self.thread.start()
+
+		#self.thread = threading.Thread(target=self.update, args=())
+		#self.thread.daemon = True
+		#self.thread.start()
+
+		p = mp.Process(target=self.update)
+		p.start()
+
+
 		return self
-	
+
+	def info(title):
+		print(title)
+		print('module name:', __name__)
+		print('parent process:', os.getppid())
+		print('process id:', os.getpid())
+
 	def update(self):
+		cap = cv2.VideoCapture(self.src)
+		#TimesQue=[]
 		while self.started:
-			grabbed, frame = self.cap.read()
-			#with self.read_lock:
-			self.grabbed = grabbed
-			self.frame = frame
-			if not self.FramesQue.full():
+			s=datetime.datetime.now()
+			grabbed, frame = cap.read()
+			if not self.FramesQue.qsize()>=10:
 				self.FramesQue.put(frame)
 			else:
 				self.FramesQue.get()
 				self.FramesQue.put(frame)
+			#e = (datetime.datetime.now()-s).total_seconds()
+			#TimesQue.append(e)
+			#if(len(TimesQue)==10):
+			#	print(statistics.mean(TimesQue))
+			#	print(statistics.stdev(TimesQue))
+		cap.release()
 	
 	def read(self):
-		#with self.read_lock:
+
 		if (not self.FramesQue.empty()):
 			frame=self.FramesQue.get()
 			grabbed=True
+
 		else:
-			frame=None
-			grabbed=False
-		return grabbed, frame
-	
+			startTime = datetime.datetime.now()
+			maxWaitPeriod=1000
+			while(self.FramesQue.empty()):
+				# wait for some period
+				time.sleep(maxWaitPeriod*0.001*0.1)
+				deltaT=datetime.datetime.now()-startTime
+				if (deltaT>datetime.timedelta(milliseconds=maxWaitPeriod)):
+
+					frame = None
+					grabbed = False
+					print("Que was empty for more than "+ str(maxWaitPeriod)+" ms")
+					return grabbed, frame
+
+			frame = self.FramesQue.get()
+			grabbed = True
+
+		return grabbed,frame
+
+
+
 	def stop(self):
 		self.started = False
-		self.thread.join()
+
 	def quelen(self):
 		return self.FramesQue.qsize()
+
 	def __exit__(self, exec_type, exc_value, traceback):
-		self.cap.release()
+		self.started=False
 	
