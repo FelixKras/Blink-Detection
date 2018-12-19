@@ -4,13 +4,14 @@ from imutils import face_utils
 import datetime
 import numpy as np
 import imutils
+import os
 import multiprocessing as mp
 #import queue
 import time
 import dlib
 import cv2
 import VideoCaptureAsync
-
+import struct
 
 # from imutils.video import VideoStream
 # import argparse
@@ -21,6 +22,7 @@ class ConstsClass:
 	EYE_AR_THRESH = 0.3
 	EYE_AR_CONSEC_FRAMES = 3
 	FrameWidth = 720
+	NumOfFramesToAverage = 10
 	
 	@staticmethod
 	def CalcEAR(eye):
@@ -67,9 +69,13 @@ class ImageProcUtil:
 			gray_before_CLAHE = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 		elif len(frame.shape) == 2:
 			gray_before_CLAHE = frame
-	
+
 		clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 		gray_after_CLAHE = clahe.apply(gray_before_CLAHE)
+
+		if gray_after_CLAHE.dtype==np.uint16:
+			gray_after_CLAHE=np.uint8(cv2.normalize(gray_after_CLAHE, None, 0, 255, cv2.NORM_MINMAX))
+
 		return gray_after_CLAHE
 
 	def ImproveLowLight_CLAHE_Average(self, frameIn,vs, NumFramesToAverage):
@@ -116,7 +122,7 @@ def main():
 		# initialize the frame counters and the total number of blinks
 		Local_Closed_Counter = 0
 		TOTAL = 0
-
+		frameNum = 0
 		# initialize dlib's face detector (HOG-based) and then create
 		# the facial landmark predictor
 		print("[INFO] loading facial landmark predictor...")
@@ -139,7 +145,10 @@ def main():
 
 		time.sleep(3) #give time for the async grabber to wake up and grab
 
-		(grabbed, frame) = vcapAsync.read()
+		#(grabbed, frame) = vcapAsync.read()
+		# read from files
+		#(frame, grabbed) = ReadRawFile(frameNum)
+		(frame, grabbed) = ReadPngFile(frameNum)
 
 		if not grabbed:
 			print("[INFO] bad format frame, exiting")
@@ -152,14 +161,14 @@ def main():
 
 		fourcc = cv2.VideoWriter_fourcc(*'DIVX')
 		# fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-		save = False
+		save = True
 		if save:
 			out = cv2.VideoWriter('output.avi', fourcc, 20.0, (frame.shape[1] * 2, frame.shape[0]))
 
 		UtilsClass = ImageProcUtil()
 
 		method = ['Averaging', 'Clahe', 'Averaging then Clahe', 'Clahe then Averaging', 'HSV v component and Clahe']
-		frameNum = 0
+
 
 		# loop over frames from the video stream
 		while True:
@@ -167,8 +176,9 @@ def main():
 			fpsStart =datetime.datetime.now()
 
 
-			(grabbed, frame) = vcapAsync.read()
-
+			#(grabbed, frame) = vcapAsync.read()
+			#(frame, grabbed) = ReadRawFile(frameNum)
+			(frame, grabbed) = ReadPngFile(frameNum)
 			if not grabbed:
 				print("[INFO] bad format frame num: "+str(frameNum)+"received, continuing")
 				continue
@@ -176,27 +186,28 @@ def main():
 			# SaveDarkField(Q, frame)
 			frameNum += 1
 			frame = imutils.resize(frame, width=ConstsClass.FrameWidth)
-			frame -= darkField  # remove dark field noise
-			numOfFramesToAverage=10
-			# loop through methods
-			improve_low_light = int((frameNum / 40) % (len(method))) + 1  # change the method every 80 frames
 
+			#frame -= darkField  # remove dark field noise
+
+			# loop through methods
+			#improve_low_light = int((frameNum / 40) % (len(method))) + 1  # change the method every 80 frames
+			improve_low_light =2
 			if improve_low_light <0:
 				gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 			elif improve_low_light == 1:
-				gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync, numOfFramesToAverage)
+				gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync, ConstsClass.NumOfFramesToAverage)
 
 			elif improve_low_light == 2:
 				gray = UtilsClass.ImproveLowLight_CLAHE(frame)
 
 			elif improve_low_light == 3:
-				gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync, numOfFramesToAverage)
+				gray = UtilsClass.ImproveLowLight_Average(frame, vcapAsync, ConstsClass.NumOfFramesToAverage)
 				gray = UtilsClass.ImproveLowLight_CLAHE(gray)
 
 			# todo: refactor averaging so it doesnt depend on vcap/vs and can ve fed by CLAHE
 			elif improve_low_light == 4:
-				gray = UtilsClass.ImproveLowLight_CLAHE_Average(frame, vcapAsync, numOfFramesToAverage)
+				gray = UtilsClass.ImproveLowLight_CLAHE_Average(frame, vcapAsync, ConstsClass.NumOfFramesToAverage)
 
 			elif improve_low_light == 5:
 				HSV = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -207,10 +218,10 @@ def main():
 			else:
 				gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+			frameBGR = np.uint8(cv2.normalize(cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR), None, 0, 255, cv2.NORM_MINMAX))
+
 			# detect faces in the grayscale frame
 			eyeRects = detector(gray, 0)
-
-			# loop over the face detections
 			for rect in eyeRects:
 				# determine the facial landmarks for the face region, then
 				# convert the facial landmark (x, y)-coordinates to a NumPy
@@ -224,8 +235,8 @@ def main():
 				rightEye = shape[rStart:rEnd]
 
 				(leftEyeHull, rightEyeHull, ear) = UtilsClass.HandleEyeDetection(leftEye, rightEye)
-				cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
-				cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+				cv2.drawContours(frameBGR, [leftEyeHull], -1, (0, 255, 0), 1)
+				cv2.drawContours(frameBGR, [rightEyeHull], -1, (0, 255, 0), 1)
 
 				# check to see if the eye aspect ratio is below the blink
 				# threshold, and if so, increment the blink frame counter
@@ -247,23 +258,27 @@ def main():
 
 				# draw the total number of blinks on the frame along with
 				# the computed eye aspect ratio for the frame
-				cv2.putText(frame, "Blinks: {}".format(TOTAL), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-				cv2.putText(frame, "EAR: {:.2f}".format(ear), (300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+				cv2.putText(frameBGR, "Blinks: {}".format(TOTAL), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+				cv2.putText(frameBGR, "EAR: {:.2f}".format(ear), (300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
 			fpsStop=datetime.datetime.now()
 			fpsElapsed=(fpsStop-fpsStart).total_seconds()*1000
 
-			cv2.putText(frame, "Elap: {:.1f} ms".format(fpsElapsed), (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+			cv2.putText(frameBGR, "Elap: {:.1f} ms".format(fpsElapsed), (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
 			            (255, 255, 255), 1)
-			cv2.putText(frame, "Q size: {:d}".format(vcapAsync.quelen()), (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+			cv2.putText(frameBGR, "Q size: {:d}".format(vcapAsync.quelen()), (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
 			            (255, 255, 255), 1)
 			# show the frame
 			# grayBGR = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 			grayBGR = np.stack([gray, gray, gray], 2)
+
 			cv2.putText(grayBGR, "improved frame", (10, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 			cv2.putText(grayBGR, method[improve_low_light - 1], (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
 			            (255, 255, 255), 1)
-			bothImages = cv2.hconcat([frame, grayBGR])
+
+
+			bothImages = cv2.hconcat([frameBGR, grayBGR])
 
 			# cv2.imshow("Frame", frame)
 			cv2.imshow("Frame", bothImages)
@@ -282,6 +297,34 @@ def main():
 		if save:
 			out.release()
 		cv2.destroyAllWindows()
+
+def ReadPngFile(frameNum):
+	filePath = r"E:\BlinkDetect\ZWO_camera_input\14_54_22_Png\\"
+	fileList = os.listdir(filePath)
+	if frameNum<len(fileList):
+		frame = cv2.imread(filePath + fileList[frameNum],-cv2.IMREAD_ANYDEPTH)
+		grabbed = True
+	else:
+		frame=None
+		grabbed=False
+
+	return frame, grabbed
+
+def ReadRawFile(frameNum):
+	filePath = r"E:\BlinkDetect\ZWO_camera_input\14_54_22_Raw\\"
+	fileList = os.listdir(filePath)
+
+	frame=np.reshape(np.fromfile(filePath + fileList[frameNum], dtype=np.dtype('<H')),[960,1280]);
+	grabbed=True
+
+	fr8bit = np.uint8(cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX))
+
+	cv2.imshow("uint -8", fr8bit)
+	cv2.waitKey(0)
+	# if the `q` key was pressed, break from the loop
+
+	return frame, grabbed
+
 
 #for occasional use
 def SaveDarkField(Q, frame):
